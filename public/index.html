@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ricesite KE – Rice Marketplace</title>
+<style>
+:root{--bg:#0c1517;--card:#14221f;--line:#2a3d39;--teal:#00a98a;--lime:#d0e85a;--txt:#eaf4f1;--mut:#9db3ae;--bad:#e8674f}
+*{box-sizing:border-box}body{margin:0;font:16px/1.5 system-ui,"Segoe UI",sans-serif;background:var(--bg);color:var(--txt)}
+header{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;justify-content:space-between;padding:.8rem 1.2rem;border-bottom:1px solid var(--line)}
+.brand{font-weight:800;font-size:1.3rem}.brand b{color:var(--lime)}nav{display:flex;flex-wrap:wrap;gap:.4rem}
+main{max-width:1050px;margin:auto;padding:1.2rem}footer{text-align:center;color:var(--mut);font-size:.8rem;padding:1.5rem}
+button{background:var(--teal);color:#04201a;border:0;border-radius:8px;padding:.5rem .9rem;font:inherit;font-weight:700;cursor:pointer}
+button.alt{background:transparent;color:var(--txt);border:1px solid var(--line)}button.bad{background:var(--bad);color:#fff}button.sm{padding:.25rem .6rem;font-size:.85rem}
+input,select,textarea{width:100%;padding:.55rem;border-radius:8px;border:1px solid var(--line);background:#0f1b19;color:var(--txt);font:inherit}
+label{display:block;font-size:.85rem;color:var(--mut);margin:.5rem 0 .2rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:1rem;margin-bottom:1rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1rem}.grid .card{margin:0}
+.row{display:flex;flex-wrap:wrap;gap:.6rem;align-items:end}.row>*{flex:1;min-width:140px}
+.price{color:var(--lime);font-weight:800;font-size:1.2rem}.mut{color:var(--mut);font-size:.9rem}
+.tag{display:inline-block;padding:.1rem .6rem;border-radius:99px;border:1px solid var(--teal);font-size:.78rem;color:var(--teal)}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:.5rem;border-bottom:1px solid var(--line);font-size:.92rem}
+.wrap{overflow-x:auto}#flash{position:fixed;top:.8rem;right:.8rem;z-index:9}
+.toast{background:var(--teal);color:#04201a;padding:.6rem 1rem;border-radius:8px;font-weight:700}.toast.bad{background:var(--bad);color:#fff}
+h1,h2{margin:.5rem 0}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:1rem;margin-bottom:1rem}
+.stat{font-size:1.9rem;font-weight:800;color:var(--lime)}details summary{cursor:pointer;color:var(--teal);font-weight:700;margin-top:.5rem}
+</style>
+</head>
+<body>
+<div id="flash"></div>
+<header><div class="brand">Ricesite <b>KE</b></div><nav></nav></header>
+<main id="app"></main>
+<footer>Ricesite KE – CSC429 project prototype · Africa Nazarene University</footer>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let token = localStorage.getItem('t'), me = null, view = 'browse', filters = { q: '', location: '' };
+
+async function api(url, method = 'GET', body) {
+  const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || 'Something went wrong');
+  return d;
+}
+function flash(m, bad) { $('#flash').innerHTML = `<div class="toast ${bad ? 'bad' : ''}" role="status">${esc(m)}</div>`; setTimeout(() => $('#flash').innerHTML = '', 3500); }
+async function run(fn) { try { await fn(); } catch (x) { flash(x.message, true); } }
+function sub(e, name, ...args) { e.preventDefault(); const d = Object.fromEntries(new FormData(e.target)); run(() => act[name](d, ...args)); return false; }
+function doSearch(e) { e.preventDefault(); filters = Object.fromEntries(new FormData(e.target)); render(); return false; }
+function go(v) { view = v; render(); }
+
+const act = {
+  async login(d) { const r = await api('/api/login', 'POST', d); token = r.token; localStorage.setItem('t', token); me = r.user; go('dashboard'); },
+  async register(d) { const r = await api('/api/register', 'POST', d); token = r.token; localStorage.setItem('t', token); me = r.user; flash('Welcome to Ricesite KE!'); go('dashboard'); },
+  logout() { token = null; me = null; localStorage.removeItem('t'); go('browse'); },
+  async addListing(d) { await api('/api/listings', 'POST', d); flash('Listing published'); render(); },
+  async setListing(id, body) { await api('/api/listings/' + id, 'PUT', body); render(); },
+  async editPrice(id, old) { const v = prompt('New price (KES)', old); if (v) await act.setListing(id, { price_kes: v }); },
+  async enquire(d, id) { await api('/api/enquiries', 'POST', { listing_id: id, message: d.message }); flash('Enquiry sent to the farmer'); go('dashboard'); },
+  async respond(id) { await api('/api/enquiries/' + id, 'PUT'); render(); },
+  async userStatus(id, status) { await api('/api/admin/users/' + id, 'PUT', { status }); render(); },
+  async profile(d) { me = await api('/api/me', 'PUT', d); flash('Profile saved'); }
+};
+
+const tag = s => `<span class="tag">${esc(s)}</span>`;
+const enq = x => !me ? '<p class="mut">Log in as a buyer to send an enquiry.</p>' : me.role !== 'Buyer' ? '' :
+  `<details><summary>Send enquiry</summary><form onsubmit="return sub(event,'enquire',${x.listing_id})"><label>Message</label>
+   <textarea name="message" required rows="3" placeholder="Quantity needed, delivery place..."></textarea><br><button>Send</button></form></details>`;
+const card = x => `<div class="card"><h3 style="margin:0">${esc(x.rice_variety)}</h3>
+  <div class="price">KES ${Number(x.price_kes).toLocaleString()} <span class="mut">per ${esc(x.unit)}</span></div><p>${esc(x.description)}</p>
+  <p class="mut">${x.quantity} ${esc(x.unit)} available<br>Location: ${esc(x.location)}<br>Farmer: ${esc(x.farmer_name)}</p>${enq(x)}</div>`;
+
+const views = {
+  async browse() {
+    const l = await api('/api/listings?q=' + encodeURIComponent(filters.q) + '&location=' + encodeURIComponent(filters.location));
+    return `<h1>Find rice from Kenyan farmers</h1><p class="mut">Discover • List • Connect</p>
+    <form class="row card" onsubmit="return doSearch(event)"><div><label>Variety or keyword</label><input name="q" value="${esc(filters.q)}" placeholder="e.g. Pishori"></div>
+    <div><label>Location</label><input name="location" value="${esc(filters.location)}" placeholder="e.g. Mwea"></div><button>Search</button></form>
+    <p class="mut">${l.length} listing(s) found</p><div class="grid">${l.map(card).join('') || '<p>No rice matches your search.</p>'}</div>`;
+  },
+  async login() {
+    return `<div class="card" style="max-width:420px;margin:auto"><h2>Log in</h2><form onsubmit="return sub(event,'login')">
+    <label>Email</label><input name="email" type="email" required><label>Password</label><input name="password" type="password" required><br><br><button>Log in</button></form></div>`;
+  },
+  async register() {
+    return `<div class="card" style="max-width:480px;margin:auto"><h2>Create an account</h2><form onsubmit="return sub(event,'register')">
+    <label>Full name</label><input name="full_name" required><label>Email</label><input name="email" type="email" required>
+    <label>Phone</label><input name="phone"><label>Location (town / county)</label><input name="location">
+    <label>I am a</label><select name="role"><option>Farmer</option><option>Buyer</option></select>
+    <label>Password (8+ characters)</label><input name="password" type="password" minlength="8" required><br><br><button>Register</button></form></div>`;
+  },
+  async profile() {
+    if (!me) return views.login();
+    return `<div class="card" style="max-width:480px;margin:auto"><h2>My profile ${tag(me.role)}</h2><form onsubmit="return sub(event,'profile')">
+    <label>Email</label><input value="${esc(me.email)}" disabled><label>Full name</label><input name="full_name" value="${esc(me.full_name)}" required>
+    <label>Phone</label><input name="phone" value="${esc(me.phone)}"><label>Location</label><input name="location" value="${esc(me.location)}"><br><br><button>Save profile</button></form></div>`;
+  },
+  async dashboard() {
+    if (!me) return views.login();
+    return me.role === 'Farmer' ? farmerDash() : me.role === 'Buyer' ? buyerDash() : adminDash();
+  }
+};
+
+async function farmerDash() {
+  const [l, e] = await Promise.all([api('/api/my-listings'), api('/api/enquiries')]);
+  return `<h2>My rice listings</h2><form class="card" onsubmit="return sub(event,'addListing')"><div class="row">
+  <div><label>Variety</label><input name="rice_variety" required placeholder="Pishori"></div>
+  <div><label>Quantity</label><input name="quantity" type="number" min="1" step="any" required></div>
+  <div><label>Unit</label><select name="unit"><option>kg</option><option>bag (50kg)</option><option>tonne</option></select></div>
+  <div><label>Price (KES per unit)</label><input name="price_kes" type="number" min="1" step="any" required></div>
+  <div><label>Location</label><input name="location" required value="${esc(me.location)}"></div></div>
+  <label>Description</label><input name="description"><br><br><button>Publish listing</button></form>
+  <div class="card wrap"><table><tr><th>Variety</th><th>Quantity</th><th>Price (KES)</th><th>Status</th><th>Actions</th></tr>
+  ${l.map(x => `<tr><td>${esc(x.rice_variety)}</td><td>${x.quantity} ${esc(x.unit)}</td><td>${x.price_kes}</td><td>${tag(x.status)}</td><td>
+  ${x.status === 'Removed' ? 'Removed by admin' : `<button class="alt sm" onclick="run(()=>act.editPrice(${x.listing_id},${x.price_kes}))">Edit price</button>
+  <button class="alt sm" onclick="run(()=>act.setListing(${x.listing_id},{status:'${x.status === 'Active' ? 'Inactive' : 'Active'}'}))">${x.status === 'Active' ? 'Deactivate' : 'Activate'}</button>`}</td></tr>`).join('') || '<tr><td colspan="5">No listings yet.</td></tr>'}</table></div>
+  <h2>Enquiries from buyers</h2>${e.map(x => `<div class="card"><b>${esc(x.rice_variety)}</b> ${tag(x.status)}<p>${esc(x.message)}</p>
+  <p class="mut">From ${esc(x.buyer_name)} · ${esc(x.buyer_phone)} · ${esc(x.buyer_email)} · ${esc(x.enquiry_date)}</p>
+  ${x.status === 'New' ? `<button class="sm" onclick="run(()=>act.respond(${x.enquiry_id}))">Mark as responded</button>` : ''}</div>`).join('') || '<p class="mut">No enquiries yet.</p>'}`;
+}
+async function buyerDash() {
+  const e = await api('/api/enquiries');
+  return `<h2>My enquiries</h2><p><button onclick="go('browse')">Browse rice</button></p>${e.map(x => `<div class="card"><b>${esc(x.rice_variety)}</b> ${tag(x.status)}
+  <p>${esc(x.message)}</p><p class="mut">Farmer: ${esc(x.farmer_name)} · ${esc(x.farmer_phone)} · ${esc(x.enquiry_date)}</p></div>`).join('') || '<p class="mut">You have not sent any enquiries yet.</p>'}`;
+}
+async function adminDash() {
+  const [sm, u, l] = await Promise.all([api('/api/admin/summary'), api('/api/admin/users'), api('/api/admin/listings')]);
+  const st = (n, t) => `<div class="card"><div class="stat">${n}</div><div class="mut">${t}</div></div>`;
+  return `<h2>Administration summary</h2><div class="stats">${st(sm.farmers, 'Farmers') + st(sm.buyers, 'Buyers') + st(sm.activeListings, 'Active listings') + st(sm.enquiries, 'Enquiries') + st(sm.newEnquiries, 'New enquiries')}</div>
+  <h2>Manage accounts</h2><div class="card wrap"><table><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th></th></tr>
+  ${u.map(x => `<tr><td>${esc(x.full_name)}</td><td>${esc(x.email)}</td><td>${esc(x.role)}</td><td>${tag(x.status)}</td><td>
+  <button class="alt sm" onclick="run(()=>act.userStatus(${x.user_id},'${x.status === 'Active' ? 'Suspended' : 'Active'}'))">${x.status === 'Active' ? 'Suspend' : 'Reactivate'}</button></td></tr>`).join('')}</table></div>
+  <h2>Moderate listings</h2><div class="card wrap"><table><tr><th>Variety</th><th>Farmer</th><th>Location</th><th>Status</th><th></th></tr>
+  ${l.map(x => `<tr><td>${esc(x.rice_variety)}</td><td>${esc(x.farmer_name)}</td><td>${esc(x.location)}</td><td>${tag(x.status)}</td><td>
+  ${x.status === 'Removed' ? `<button class="alt sm" onclick="run(()=>act.setListing(${x.listing_id},{status:'Active'}))">Restore</button>` : `<button class="bad sm" onclick="run(()=>act.setListing(${x.listing_id},{status:'Removed'}))">Remove</button>`}</td></tr>`).join('')}</table></div>`;
+}
+
+function nav() {
+  $('nav').innerHTML = `<button class="alt" onclick="go('browse')">Browse rice</button>` + (me
+    ? `<button class="alt" onclick="go('dashboard')">Dashboard</button><button class="alt" onclick="go('profile')">Profile</button><button onclick="act.logout()">Log out</button>`
+    : `<button class="alt" onclick="go('login')">Log in</button><button onclick="go('register')">Register</button>`);
+}
+async function render() {
+  nav();
+  try { $('#app').innerHTML = await views[view](); } catch (x) { $('#app').innerHTML = `<p class="card">${esc(x.message)}</p>`; }
+}
+(async () => { if (token) { try { me = await api('/api/me'); } catch { token = null; localStorage.removeItem('t'); } } render(); })();
+</script>
+</body>
+</html>
